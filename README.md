@@ -31,6 +31,22 @@ The analysis was performed in **R** using the following workflow:
 * **Separation:** PCA and PLS-DA score plots confirm distinct clustering based on biological sex.
 
 ## 📁 Repository Structure
+
+.
+├── data/
+│   └── data.csv                # Raw metabolomics dataset
+├── scripts/
+│   ├── metabolite_project.Rmd  # Main analysis pipeline (R Markdown)
+│   └── functions.R             # (Optional) Helper functions
+├── plots/
+│   ├── pca_score_plot.png      # Global variance visualization
+│   ├── plsda_vip_ranking.png   # Top 21 metabolite biomarkers
+│   └── final_model_roc.png     # Model performance curve
+├── docs/
+│   └── project_report.pdf      # Detailed final report
+├── .gitignore                  # Files to exclude (e.g., .Rhistory)
+└── README.md                   # Project documentation and summary
+
 * `data/`: Contains the metabolomics dataset (samples vs metabolites).
 * `scripts/`: `metabolite_project_final.Rmd` - Full analysis code.
 * `plots/`: Exported visualizations (PCA, PLS-DA scores, VIP rankings).

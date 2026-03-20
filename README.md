@@ -32,6 +32,7 @@ The analysis was performed in **R** using the following workflow:
 
 ## 📁 Repository Structure
 
+```text
 .
 ├── data/
 │   └── data.csv                # Raw metabolomics dataset
@@ -46,6 +47,7 @@ The analysis was performed in **R** using the following workflow:
 │   └── project_report.pdf      # Detailed final report
 ├── .gitignore                  # Files to exclude (e.g., .Rhistory)
 └── README.md                   # Project documentation and summary
+```
 
 * `data/`: Contains the metabolomics dataset (samples vs metabolites).
 * `scripts/`: `metabolite_project_final.Rmd` - Full analysis code.

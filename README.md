@@ -1,63 +1,93 @@
 # Sex-associated Differences in Baseline Urinary Metabolites
 
+> A computational metabolomics project developed for the Introduction to Statistical Learning course at the Universitat Politècnica de Barcelona (UPC), December 2025.  
+
 [![R-Analysis](https://img.shields.io/badge/Language-R-blue.svg)](https://www.r-project.org/)
 [![Bioinformatics](https://img.shields.io/badge/Field-Bioinformatics-green.svg)](https://en.wikipedia.org/wiki/Bioinformatics)
 [![Machine Learning](https://img.shields.io/badge/Methods-PLS--DA%20%7C%20PCA-orange.svg)](https://en.wikipedia.org/wiki/Partial_least_squares_regression)
 
-## 📌 Project Overview
-This project explores the biological basis for gender variability in metabolomic profiles. Using a dataset of healthy individuals, we implemented a computational pipeline to identify whether urinary metabolic signatures are globally distinct between males and females. Establishing these baseline differences is crucial for advancing personalized medicine and improving disease risk factor assessments.
+## Project Overview
+This project reproduces and extends the analysis from Fan et al. (2018), a Scientific Reports study that profiled urinary metabolites in 60 healthy males and 60 age-matched females using untargeted GC-TOF-MS. The original paper identified meaningful sex-associated differences in baseline urinary metabolism, findings with direct implications for biomarker discovery in bladder-related diseases such as interstitial cystitis (IC).
 
-The study is based on the work by **Fan et al. (2018)**: *"Sex-associated differences in baseline urinary metabolites of healthy adults"*.
+Using the supplementary data from that publication, we implemented a full machine learning pipeline in R to characterize the urinary metabolome by sex, identify the most discriminating metabolites, and evaluate the performance of a PLS-DA classifier with and without feature selection.
 
-## 🧬 Biological Context
-Metabolomics provides a functional readout of cellular activity. This analysis focuses on primary metabolism (TCA cycle, fatty acids, and amino acids) to identify sex-specific biomarkers. Key findings include:
-* **Significant Upregulation in Males:** $\alpha$-ketoglutarate (2.3-fold) and 4-hydroxybutyric acid (4.41-fold).
-* **Pathway Involvement:** Saturated fatty acids, TCA cycle components, and butyrates.
+## Goals
+### General Goals
+Investigate whether biological sex influences baseline urinary metabolomic profiles in healthy adults, and assess the implications of these differences for urine-based biomarker discovery in bladder-related diseases.
 
-## 🛠️ Technical Pipeline
-The analysis was performed in **R** using the following workflow:
+### Specific Goals
+- Characterize global urinary metabolomic patterns in healthy males and females using untargeted GC-TOF-MS data.
+- Identify metabolites and metabolite classes that differ significantly between sexes using univariate and multivariate statistical methods.
+- Evaluate whether sex-specific metabolic differences may act as confounding factors in disease biomarker studies.
+- Provide a baseline metabolic reference to support sex-aware interpretation of urinary biomarkers, particularly for interstitial cystitis.
 
-1.  **Preprocessing:** Data transposition, log10 transformation to correct skewness, and IQR-based outlier detection.
-2.  **Exploratory Data Analysis (EDA):** Principal Component Analysis (PCA) to visualize global variance.
-3.  **Supervised Learning:** * Model: **Partial Least Squares Discriminant Analysis (PLS-DA)**.
-    * Validation: 5-fold internal cross-validation and external hold-out validation.
-    * Optimization: Latent variable (LV) selection based on error rate minimization.
-4.  **Feature Selection:** * Calculated **VIP (Variable Importance in Projection)** scores.
-    * Implemented **Recursive Feature Elimination (RFE)** to identify the most predictive metabolite subset.
+---
 
-## 📊 Key Results
-* **Classification Accuracy:** The optimized PLS-DA model achieved a cross-validation accuracy of **~76%**.
-* **Biomarker Discovery:** Identified a subset of **21 high-importance metabolites** (VIP > 1) that drive the separation between male and female metabolic profiles.
-* **Separation:** PCA and PLS-DA score plots confirm distinct clustering based on biological sex.
+## Dataset
+ 
+- **Source:** Supplementary materials from Fan et al. (2018), *Scientific Reports* 8, 11883.
+- **Samples:** 121 total - 60 healthy females and 61 healthy males (age range: 45–65 years), all medication-free for ≥2 months.
+- **Features:** 414 urinary metabolites profiled via Gas Chromatography–Time-of-Flight Mass Spectrometry (GC-TOF-MS).
+- **Missing values:** None (pre-imputed in the original dataset using BinBase software).
 
-## 📁 Repository Structure
+---
+ 
+## Key Results
+ 
+| Model | Features | Components | Test Accuracy | Balanced Accuracy | AUROC |
+|---|---|---|---|---|---|
+| Full feature model | 414 | 4 | 0.556 | 0.556 | 0.778 |
+| RFE-selected model | ~60 | re-optimized | 0.667 | 0.667 | 0.762 |
+ 
+- **PCA** showed no strong visual separation between sexes in the first two principal components, with ~40 components needed to explain 80% of the total variance — consistent with the high dimensionality and subtle sex signal in the data.
+- **Univariate analysis** (after FDR correction) identified 4 significantly different metabolites between sexes: succinic acid, malic acid, alpha-ketoglutarate, and an unknown compound (X7402).
+- **VIP analysis** from the full PLS-DA model flagged 149 features with VIP > 1, with succinic acid and malic acid consistently ranking among the top discriminators — in agreement with the original paper.
+- **RFE reduced** the feature space by ~85% while improving test accuracy from 55.6% to 66.7%, demonstrating the value of feature selection in high-dimensional metabolomics.
+- These findings support the original paper's conclusion that sex is a meaningful biological variable that should be accounted for in urinary biomarker studies.
 
-```text
+
+
+## Repository Structure
+
+```
 .
-├── data/
-│   └── data.csv                # Raw metabolomics dataset
-├── scripts/
-│   ├── metabolite_project.Rmd  # Main analysis pipeline (R Markdown)
-│   └── functions.R             # (Optional) Helper functions
-├── plots/
-│   ├── pca_score_plot.png      # Global variance visualization
-│   ├── plsda_vip_ranking.png   # Top 21 metabolite biomarkers
-│   └── final_model_roc.png     # Model performance curve
-├── docs/
-│   └── project_report.pdf      # Detailed final report
-├── .gitignore                  # Files to exclude (e.g., .Rhistory)
-└── README.md                   # Project documentation and summary
+├── metabolite_project_final.Rmd   # Full annotated R Markdown pipeline
+├── data.csv                       # Input metabolomic dataset
+├── plots/                         # Output figures generated by the pipeline
+│   ├── distribution_plots.png
+│   ├── original_log10_transform.png
+│   ├── pca_autoplot.png
+│   ├── plsda_score_plot.png
+│   ├── vip_scores.png
+│   ├── rfe_results.png
+│   ├── plsda_score_plot_final.png
+│   ├── confusion_matrix_final.png
+│   └── roc_curve_final.png
+└── README.md
 ```
 
-* `data/`: Contains the metabolomics dataset (samples vs metabolites).
-* `scripts/`: `metabolite_project_final.Rmd` - Full analysis code.
-* `plots/`: Exported visualizations (PCA, PLS-DA scores, VIP rankings).
-* `README.md`: Project documentation.
-
-## 🚀 Getting Started
-### Prerequisites
-You will need R installed with the following packages:
+## Dependencies
+ 
+This project was developed in R. The following packages are required:
+ 
 ```r
-install.packages(c("ggplot2", "caret", "dplyr", "pROC", "tidyr", "ggfortify"))
-if (!require("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+install.packages(c("ggplot2", "caret", "dplyr", "pROC", "class", "tidyr", "ggfortify"))
+ 
+# mixOmics requires Bioconductor
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
 BiocManager::install("mixOmics")
+```
+
+## How to Run
+ 
+1. Clone this repository.
+2. Place `data.csv` in the project root directory (obtained from the original paper's supplementary materials).
+3. Open `metabolite_project_final.Rmd` in RStudio.
+4. Knit to HTML or PDF, or run chunks interactively.
+ 
+---
+ 
+## Reference
+ 
+Fan, S., Yeon, A., Shahid, M. et al. *Sex-associated differences in baseline urinary metabolites of healthy adults.* Sci Rep **8**, 11883 (2018). https://doi.org/10.1038/s41598-018-29592-3

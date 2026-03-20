@@ -1,0 +1,921 @@
+---
+title: "Sex-associated differences in baseline urinary metabolites of healthy adults"
+subtitle: "Small Project"
+author: Òscar Contreras Parejo, Eira Fontanals Muñoz, Oriol Leal Bosser & Marc Jordi
+  Torres Valero
+date: "2025-12-10"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+Load required libraries
+
+```{r, echo=FALSE, message=FALSE}
+library(ggplot2)
+library(caret)
+library(dplyr)
+# if not installed BiocManager::install("mixOmics") # nms per mac (uri)
+library(mixOmics)
+library(pROC)
+library(class)
+library(tidyr)
+library(ggfortify)
+
+set.seed(123) # for reproducibility
+```
+
+# Import the data
+
+The raw metabolomics dataset was first imported into R to enable preprocessing and downstream statistical analysis.
+
+```{r}
+# Read the CSV file
+data <- read.csv("data.csv", row.names = 1)
+```
+
+To inspect the structure of the dataset and verify correct import, the first rows and columns were visually examined.
+
+```{r}
+# Show a small portion of the data
+head(data[, 1:6], 8)
+```
+
+Since the original dataset was organized with samples as columns and metabolites as rows, the matrix was transposed to obtain a structure where samples correspond to rows and features correspond to columns.
+
+```{r}
+# Transpose the matrix
+data_t <- t(data)
+```
+
+The transposed dataset was visually inspected to confirm the correctness of the new data orientation.
+
+```{r}
+# Preview the transformed matrix
+head(data_t[, 1:6], 8)
+```
+
+The biological sex of each sample was originally encoded in the row names; therefore, an explicit categorical variable was created to store this information for supervised analysis.
+
+```{r}
+# Generate a vector containing the sex of each sample
+Sex <- ifelse(grepl("^M", rownames(data_t)), "Male", "Female")
+
+# Merge the feature matrix with the sex annotation
+data_mf <- data.frame(data_t, Sex = Sex)
+View(data_mf)
+```
+
+A sanity check was performed by computing the number of samples and features to ensure that the dataset dimensions were consistent with expectations.
+
+```{r}
+# Calculate the number of variables
+n_col <- ncol(data_mf)
+
+# Calculate the number of samples
+n_row <- nrow(data_mf)
+
+# Print a summary of dataset dimensions
+paste('The dataset contains', n_col, 'variables and', n_row, 'samples.')
+```
+
+Finally, the dataset was screened for missing values to assess data completeness before further statistical analysis.
+
+```{r}
+# Count missing entries in the dataset
+n_NA <- sum(is.na(data_mf))
+
+# Report how many missing values were detected
+paste("A total of", n_NA, "missing values were found.")
+```
+
+To facilitate downstream analyses and improve code readability, the final curated dataset was renamed.
+
+```{r}
+# Rename the existing dataset for clarity in subsequent analyses
+metabo_df <- data_mf
+```
+
+------------------------------------------------------------------------
+
+# Basic Exploratory Data Analysis (Summary Statistics)
+
+To obtain a first overview of the data distribution and central tendencies of the metabolites, we computed basic summary statistics.
+
+```{r}
+# Select only numeric variables
+numeric_data <- metabo_df[, sapply(metabo_df, is.numeric)]
+
+# Display basic info: number of numeric features and sample size
+paste("The dataset contains", ncol(numeric_data), "numeric features across", nrow(numeric_data), "samples.")
+```
+
+Here, we only consider numeric features for analysis. In `metabo_df`, the only non-numeric column is Sex, which we will use later as a categorical label for visualization and classification. That’s why the numeric dataset contains 414 features across 121 samples.
+
+## Normality assessment
+
+To evaluate whether the metabolite distributions follow a Gaussian behavior, we visually and statistically assessed its normality.
+
+```{r}
+# PLOT
+# Reshape data to long format for faceting
+long_data <- numeric_data[, 1:4] %>%
+  pivot_longer(cols = everything(), 
+               names_to = "variable", 
+               values_to = "value")
+
+# Create faceted histograms
+distribution_plot <- ggplot(long_data, aes(x = value)) +
+  geom_histogram(bins = 30, fill = "royalblue3", color = "black", linewidth = 0.2) +
+  facet_wrap(~ variable, scales = "free", nrow = 2, ncol = 2) +
+  theme_classic() +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold")) +
+  labs(title = "Distribution Plots",
+       x = "Value",
+       y = "Frequency")
+
+distribution_plot
+
+# save plot
+ggsave("plots/distribution_plots.png", plot = distribution_plot, width = 8, height = 6, dpi = 300)
+```
+
+The four selected metabolites (*xylose*, *xylonic* *acid* *isomer*, *xylonic* *acid*, *xylitol*) show distributions that are left-shifted, meaning most samples have lower concentrations and a few have higher values. This skewness is common in metabolomics data and indicates that a small number of samples have relatively high levels of these metabolites.
+
+## Log10 transformation
+
+To assess whether a non-linear transformation improves data normality, a log10 transformation was applied to the metabolite intensities.
+
+```{r}
+# Apply log10 transformation (avoid log(0) by adding 1)
+log_data <- log10(numeric_data + 1)
+
+# PLOT BUT USING GGPLOT + FACET WRAP/GRID
+comparison_data <- data.frame(
+  value = c(numeric_data[[1]], log_data[[1]]),
+  transformation = rep(c("Original", "Log10 transformed"), 
+                       each = length(numeric_data[[1]]))
+)
+
+original_log10_transform <- ggplot(comparison_data, aes(x = value)) +
+  geom_histogram(bins = 30, fill = "royalblue3", color = "black", linewidth = 0.2) +
+  facet_wrap(~ transformation, nrow = 2, ncol = 1, scales = "free") +
+  theme_classic() +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold")) +
+  labs(title = "Original vs Log10 Transformed",
+       x = "Value",
+       y = "Count")
+
+original_log10_transform
+
+ggsave("plots/original_log10_transform.png", plot = original_log10_transform, width = 8, height = 6, dpi = 300)
+```
+
+The original metabolite concentrations are highly skewed, with most values clustered at low concentrations and a few very high values. This results in a left-skewed histogram with one dominant peak. Applying a log10 transformation compresses the large values and spreads out the lower ones, producing a distribution that is closer to normal, which is more suitable for downstream analyses like PCA.
+
+## Outlier detection
+
+To identify potential extreme values that could bias downstream analyses, we performed outlier detection using the interquartile range (IQR) method.
+
+```{r}
+# Function to detect outliers
+detect_outliers <- function(x){
+  Q1 <- quantile(x, 0.25)
+  Q3 <- quantile(x, 0.75)
+  IQR <- Q3 - Q1
+  which(x < (Q1 - 1.5*IQR) | x > (Q3 + 1.5*IQR))
+}
+
+# Plot boxplot without red outlier points
+boxplot(log_data, main="Outlier Detection (Boxplot)", outline=FALSE)
+```
+
+A boxplot was generated for all metabolites to visually inspect potential outliers. The standard boxplot whiskers represent 1.5×IQR, and individual points were omitted to avoid clutter. Outliers were then counted for each metabolite using the IQR method.
+
+```{r}
+# Compute number of outliers per metabolite
+outlier_counts <- sapply(log_data, function(x) length(detect_outliers(x)))
+
+# Summary of outlier counts
+summary(outlier_counts)
+
+# Create a data frame for plotting
+outlier_df <- data.frame(
+  Metabolite = names(outlier_counts),
+  N_Outliers = outlier_counts
+)
+
+# Print detailed summary statistics
+cat("=== Outlier Analysis Summary ===\n")
+cat("Total metabolites analyzed:", length(outlier_counts), "\n")
+cat("Metabolites with NO outliers:", sum(outlier_counts == 0), "\n")
+cat("Metabolites with outliers:", sum(outlier_counts > 0), "\n")
+cat("Mean outliers per metabolite:", round(mean(outlier_counts), 2), "\n")
+cat("Median outliers per metabolite:", median(outlier_counts), "\n")
+cat("Max outliers in any metabolite:", max(outlier_counts), "\n")
+cat("Metabolites with >10 outliers:", sum(outlier_counts > 10), "\n")
+
+# Histogram of outlier counts with annotations
+outlier_histogram <- ggplot(outlier_df, aes(x = N_Outliers)) +
+  geom_histogram(binwidth = 1, fill = "royalblue3", color = "black", linewidth = 0.2) +
+  labs(
+    title = "Distribution of Outliers Across Metabolites",
+    subtitle = paste0("Median = 4 outliers/metabolite | Range: 0-18"),
+    x = "Number of Outliers per Metabolite",
+    y = "Frequency (Number of Metabolites)"
+  ) +
+  theme_classic() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 14),
+    plot.subtitle = element_text(hjust = 0.5, size = 11)
+  ) +
+  geom_vline(xintercept = 4, linetype = "dashed", color = "red", linewidth = 0.8) +
+  annotate("text", x = 4.5, y = max(table(outlier_counts)) * 0.95,
+           label = "Median = 4", color = "red", size = 4, hjust = 0) +
+  scale_x_continuous(breaks = seq(0, 18, 2))
+
+print(outlier_histogram)
+ggsave("plots/outlier_histogram.png", plot = outlier_histogram, width = 8, height = 6, dpi = 600)
+```
+
+This analysis shows that some metabolites have no outliers, while others have up to 18, with most having between 2 and 7. The approach quantifies outlier presence, meaning the dataset contains some extreme values across different metabolites.
+
+## PCA – Principal Component Analysis
+
+To reduce the dimensionality of the dataset and identify the main sources of variance, a Principal Component Analysis (PCA) was performed on the scaled data.
+
+```{r}
+# Scale (log-transformed) data (very important for PCA)
+scaled_data <- scale(log_data)
+
+# Run PCA
+pca <- prcomp(scaled_data)
+```
+
+To visually explore potential clustering patterns between male and female samples, we projected the data onto the first two principal components.
+
+```{r}
+# SAME PLOT USING AUTPLOT(GGFORTIFY) = BETTER
+pca_autoplot <- ggplot2::autoplot(pca,
+                                  data = metabo_df,
+                                  colour = "Sex",
+                                  main = "PCA Score Plot (PC1 vs PC2)") +
+  theme_classic() +
+  labs(color = "Sex")
+pca_autoplot
+
+# Save the plot using ggsave()
+ggsave("plots/pca_autoplot.png", plot = pca_autoplot, width = 8, height = 6, dpi = 300)
+```
+
+The PCA score plot showed no strong visual separation between male and female samples in the first two principal components, suggesting that sex-related differences are subtle and distributed across multiple dimensions.
+
+In order to determine how many principal components retain most of the information in the dataset, we calculated the proportion of explained variance.
+
+```{r}
+# Variance explained
+var_explained <- pca$sdev^2 / sum(pca$sdev^2)
+cum_var <- cumsum(var_explained)
+
+# put into a data frame
+df <- data.frame(
+  PC = 1:length(var_explained),
+  var_explained = var_explained,
+  cum_var = cum_var
+)
+
+# scree plot (first 20 components)
+scree_plot <- ggplot(df[1:20, ], aes(x = PC, y = var_explained)) +
+  geom_col(fill = "royalblue3", color = "black", linewidth = 0.2) +
+  labs(
+    title = "Scree Plot (first 20 components)",
+    x = "Principal Component",
+    y = "Explained Variance"
+  ) +
+  theme_classic()
+
+scree_plot
+
+# cumulative variance plot
+cum_var_plot <- ggplot(df, aes(x = PC, y = cum_var)) + 
+  geom_line(color = "royalblue3", linewidth = 0.6) +
+  geom_point(color = "royalblue3", size = 1.8) +
+  labs(
+    title = "Cumulative Variance Explained",
+    x = "Number of Components",
+    y = "Cumulative Explained Variance"
+  ) +
+  theme_classic()
+
+cum_var_plot
+
+# Components needed to explain at least 80% variance
+which(cum_var >= 0.80)[1]
+
+ggsave("plots/scree_plot.png", plot = scree_plot, width = 8, height = 6, dpi = 300)
+ggsave("plots/cum_var_plot.png", plot = cum_var_plot, width = 8, height = 6, dpi = 300)
+```
+
+Approximately 40 principal components were required to explain at least 80% of the total variance, highlighting the high dimensionality of the metabolomics dataset.
+
+------------------------------------------------------------------------
+
+# Supervised Data Analysis: PLS-DA
+
+To identify sex-related patterns in metabolite profiles, we performed a supervised Partial Least Squares Discriminant Analysis (PLS-DA).
+
+## Hold-out for external validation
+
+We split the dataset into training (70%) and testing (30%) sets using a stratified approach to preserve sex balance.
+
+```{r}
+set.seed(123) # for reproducibility
+# Split indices
+train_index <- createDataPartition(metabo_df$Sex, p = 0.7, list = FALSE)
+
+# Separate training and test sets
+train_data_raw <- numeric_data[train_index, ]
+train_labels <- metabo_df$Sex[train_index]
+
+test_data_raw <- numeric_data[-train_index, ]
+test_labels <- metabo_df$Sex[-train_index]
+
+# Apply log10 transformation after splitting
+train_data <- log10(train_data_raw + 1)
+test_data <- log10(test_data_raw + 1)
+```
+
+## Internal validation: k-fold cross-validation
+
+We performed 10-fold stratified cross-validation on the training data to evaluate the stability of the model. The training data were split into 10 folds while preserving the sex distribution. Each fold was used once for validation while the other nine folds served for training. The mean cross-validated accuracy provides an estimate of the model’s performance on unseen data.
+
+```{r}
+set.seed(123) # for reproducibility
+k <- 10
+folds <- createFolds(y = train_labels, k = k, returnTrain = FALSE)
+fold_accuracies <- numeric(k)
+
+for (i in 1:k) {
+  cv_test_idx <- folds[[i]]
+  cv_train_idx <- setdiff(seq_along(train_labels), cv_test_idx)
+  
+  X_cv_train <- train_data[cv_train_idx, ]
+  Y_cv_train <- as.factor(train_labels[cv_train_idx]) # needs to be a factor!
+  
+  X_cv_val <- train_data[cv_test_idx, ]
+  Y_cv_val <- train_labels[cv_test_idx]
+  
+  fold_model <- plsda(X_cv_train, Y_cv_train, ncomp = 10)
+  fold_pred <- predict(fold_model, X_cv_val)$class$max.dist
+  fold_accuracies[i] <- mean(fold_pred == Y_cv_val)
+}
+
+mean_cv_accuracy <- mean(fold_accuracies)
+paste("Mean 10-fold CV accuracy on training data:", round(mean_cv_accuracy, 3))
+```
+
+## Univariate hypothesis testing in training
+
+To identify metabolites exhibiting sex-related differences, we applied univariate t-tests to each metabolite in the training set and corrected for multiple testing using the Benjamini-Hochberg FDR procedure.
+
+```{r}
+## Univariate hypothesis testing in training (function-based)
+
+# Function for univariate feature selection with Benjamini-Hochberg correction
+univariate_selection <- function(X_train, y_train, method = "t.test", alpha = 0.05) {
+  n_features <- ncol(X_train)
+  p_values <- numeric(n_features)
+  test_statistics <- numeric(n_features)
+
+  for (i in 1:n_features) {
+    feature_values <- X_train[, i]
+    
+    if (method == "t.test") {
+      test_result <- t.test(feature_values ~ y_train)
+      p_values[i] <- test_result$p.value
+      test_statistics[i] <- abs(test_result$statistic)
+    }
+  }
+  
+  # Apply Benjamini-Hochberg correction
+  adjusted_p_values <- p.adjust(p_values, method = "BH")
+  
+  # Indices of significant features
+  selected_indices <- which(adjusted_p_values <= alpha)
+  
+  if (length(selected_indices) == 0) {
+    warning(paste("No features selected with alpha =", alpha))
+  }
+  
+  return(list(
+    selected_features = selected_indices,
+    p_values = p_values,
+    adjusted_p_values = adjusted_p_values,
+    test_statistics = test_statistics,
+    alpha_used = alpha,
+    n_significant = length(selected_indices)
+  ))
+}
+
+# Apply function to training data
+univar_results <- univariate_selection(train_data, train_labels, method = "t.test", alpha = 0.05)
+
+# Summary of results
+paste("Number of significant metabolites after FDR:", univar_results$n_significant)
+
+# get names of significant features
+signif_features <- colnames(train_data)[univar_results$selected_features]
+signif_features
+```
+
+Univariate analysis of the training set identified 4 metabolites showing significant differences between sexes after FDR correction: *succinic.acid*, *malic.acid*, *alpha.ketoglutarate* and *X7402*. These metabolites are likely the main contributors to sex-related metabolic variation in this dataset.
+
+## Train initial PLS-DA model
+
+We train a preliminary PLS-DA model on log-transformed training data.
+
+```{r}
+# Train PLS-DA on training data
+plsda_model <- mixOmics::plsda(train_data, as.factor(train_labels), ncomp = 10) # initial arbitrary choice
+
+# train_labels must be a factor and needs to be mixOmics::plsda() instead of plsda()
+```
+
+## Optimize the PLS-DA model
+
+We used perf() from mixOmics to perform repeated 10-fold cross-validation on the training data to select the optimal number of latent variables (ncomp). The BER metric and repeated M-fold validation ensure a robust choice.
+
+```{r}
+set.seed(123)
+perf_result <- perf(plsda_model,
+                    validation = "Mfold", 
+                    folds = 10, 
+                    nrepeat = 50, 
+                    progressBar = FALSE)
+
+plot(perf_result, sd = TRUE, legend.position = "horizontal")
+print(perf_result$choice.ncomp) # visualize the ncomp 
+
+
+# Look at perf_result to decide optimal_ncomp
+optimal_ncomp <- perf_result$choice.ncomp["BER", "max.dist"]
+
+paste("Optimal number of latent variables:", optimal_ncomp)
+```
+
+## Train final PLS-DA model
+
+We retrain the PLS-DA model using the optimal number of components determined above.
+
+```{r}
+final_plsda <- mixOmics::plsda(train_data, train_labels, ncomp = optimal_ncomp)
+```
+
+## Evaluate model on test set
+
+We evaluate the pre-final model using classification metrics and AUROC.
+
+```{r, message=FALSE}
+# Predict on test data
+plsda_pred <- predict(final_plsda, test_data)
+
+# Extract predicted classes
+predicted_classes <- plsda_pred$class$max.dist
+if (length(predicted_classes) != length(test_labels)) {
+  predicted_classes <- predicted_classes[, 1]  # ensure vector format
+}
+
+# Confusion matrix
+confusion_matrix <- table(Predicted = predicted_classes, Actual = test_labels)
+confusion_matrix
+# Accuracy
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+cm_df <- as.data.frame(as.table(confusion_matrix))
+names(cm_df) <- c("Predicted", "Actual", "Count")
+
+cm_plot_initial <- ggplot(cm_df, aes(x = Predicted, y = Actual, fill = Count)) +
+  geom_tile(color = "white", linewidth = 1) +
+  geom_text(aes(label = Count), color = "white", size = 8, fontface = "bold") +
+  scale_fill_gradient(low = "white", high = "royalblue3") +
+  labs(title = "Confusion Matrix - Test Set",
+       subtitle = paste("Accuracy =", sprintf("%.2f%%", accuracy*100)),
+       x = "Predicted Class",
+       y = "Actual Class") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 12))
+
+ggsave("plots/confusion_matrix_initial.png", plot = cm_plot_initial, width = 6, height = 6, dpi = 300)
+
+
+# Balanced Accuracy
+sensitivity <- confusion_matrix["Male","Male"] / sum(confusion_matrix[,"Male"])
+specificity <- confusion_matrix["Female","Female"] / sum(confusion_matrix[,"Female"])
+balanced_accuracy <- (sensitivity + specificity) / 2
+
+# Print metrics
+cat("Accuracy:", round(accuracy,3), "\n")
+cat("Balanced Accuracy:", round(balanced_accuracy,3), "\n")
+cat("Sensitivity (Recall) for Male:", round(sensitivity,3), "\n")
+cat("Specificity for Female:", round(specificity,3), "\n")
+```
+
+```{r, message=FALSE}
+# AUROC
+test_numeric <- ifelse(test_labels == "Male", 1, 0)
+
+plsda_pred_prob <- plsda_pred$predict[, "Male", optimal_ncomp] # choose n_comp instead of 1
+plsda_pred_prob <- as.numeric(plsda_pred_prob) # Ensure numeric values
+roc_curve <- roc(test_numeric, plsda_pred_prob, levels = c(0, 1))
+auc_value <- auc(roc_curve)
+
+# plot
+png("plots/roc_curve.png", width = 2000, height = 2000, res = 300)
+plot(roc_curve, main = "PLS-DA ROC Curve", col = "royalblue3", lwd = 2)
+legend("bottomright", legend = paste("AUROC =", round(auc_value, 3)), col = "royalblue3", lwd = 2)
+dev.off()
+
+plot(roc_curve, main = "PLS-DA ROC Curve", col = "royalblue3", lwd = 2)
+```
+
+## PLS-DA score plot
+
+We can now plot the final model to visualize the separation between male and female samples. Keep in mind that we use the first 2 components of the training set since they're the ones that contain the most information (ordered by importance), but the whole model uses all of them.
+
+```{r}
+train_df <- data.frame(
+  LV1 = final_plsda$variates$X[,1],
+  LV2 = if(optimal_ncomp >= 2) final_plsda$variates$X[,2] else rep(0, nrow(final_plsda$variates$X)),
+  Sex = train_labels
+)
+
+plsda_plot <-  ggplot(train_df, aes(x = LV1, y = LV2, color = Sex)) +
+  geom_point(size = 2, alpha = 0.7) +
+  stat_ellipse(aes(fill = Sex), alpha = 0.1, type = "norm", level = 0.95, geom = "polygon") +
+  xlab(paste0("PLS-DA Component 1 (", round(final_plsda$prop_expl_var$X[1]*100,2), "% X-variance)")) +
+  ylab(paste0("PLS-DA Component 2 (", round(final_plsda$prop_expl_var$X[2]*100,2), "% X-variance)")) +
+  ggtitle("PLS-DA Score Plot") +
+  theme_classic()
+
+
+print(plsda_plot)
+ggsave("plots/plsda_score_plot.png",plot = plsda_plot , width = 8, height = 6, dpi = 300)
+```
+
+------------------------------------------------------------------------
+
+# Feature Selection
+
+## Feature ranking using VIP scores
+
+VIP scores quantify the importance of each feature in explaining the variation in both X (metabolites) and Y (class labels). A common threshold is VIP \> 1 to consider a metabolite important.
+
+```{r}
+# Compute VIP scores for final PLS-DA model
+vip_scores_matrix <- vip(final_plsda)
+
+# Average VIP score across components for each feature
+avg_vip_scores <- rowMeans(vip_scores_matrix)
+
+# Create a data frame with feature names and VIP scores
+vip_df <- data.frame(
+  Feature = rownames(vip_scores_matrix),
+  VIP_Score = avg_vip_scores
+)
+
+# Order features by descending VIP
+vip_df <- vip_df[order(vip_df$VIP_Score, decreasing = TRUE), ]
+
+# Mark features with VIP > 1 as important
+vip_df$Important <- vip_df$VIP_Score > 1
+
+# Keep top 10 VIP features for visualization
+top_vip_df <- head(vip_df, 10)
+top_vip_df$Feature <- factor(top_vip_df$Feature, levels = rev(top_vip_df$Feature))
+
+# Plot VIP scores
+vip_scores_plot <- ggplot(top_vip_df, aes(x = Feature, y = VIP_Score)) +
+  geom_bar(stat = "identity", width = 0.8, fill = "royalblue3", color = "black", linewidth = 0.2) +
+  coord_flip() +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red", linewidth = 0.7) +
+  labs(title = "Top 10 PLS-DA Features (VIP Scores)",
+       x = "Metabolite",
+       y = "VIP Score") +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 12),
+    axis.text = element_text(size = 9),
+    axis.title = element_text(size = 10),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+print(vip_scores_plot)
+ggsave("plots/vip_scores.png", plot = vip_scores_plot, width = 8, height = 6, dpi = 300)
+
+# Number of important VIP features
+num_important_vip <- sum(vip_df$VIP_Score > 1)
+paste("Number of important features according to VIP (>1):", num_important_vip)
+```
+
+The VIP scores from the final PLS-DA model identified 149 important features out of 414 total metabolites. While this is a large number, the 4 metabolites found significant by univariate analysis are all included among the top 10 VIP features, demonstrating that the PLS-DA model reliably captures the key metabolites contributing to sex differentiation.
+
+This comparison highlights that VIP scores are more inclusive, reflecting the multivariate structure of the data, while univariate testing identifies only the strongest individual effects. The overlap between the top VIP features and the significant univariate metabolites supports the robustness and biological relevance of the findings.
+
+## Recursive Feature Elimination (RFE) using PLS-DA
+
+RFE iteratively removes the least important features (e.g., based on VIP or other ranking) and evaluates model performance at each step to find the minimal set of features that gives optimal classification.
+
+```{r}
+## Recursive Feature Elimination (RFE) using PLS-DA with VIP
+rfe_plsda_selection <- function(X_train, y_train, 
+                                cv_folds = 10, 
+                                step_size = 0.10,
+                                min_features = 20, 
+                                max_iter = 20,
+                                ncomp_rfe = 3) {
+  
+  current_features <- seq_len(ncol(X_train))
+  rfe_results <- list()
+  iteration <- 1
+  
+  cat("Starting RFE with", length(current_features), "features\n")
+  
+  while (length(current_features) > min_features && iteration <= max_iter) {
+    
+    cat("Iteration", iteration, "- Features:", length(current_features), "\n")
+    
+    cv_indices <- createFolds(y_train, k = cv_folds, list = TRUE)
+    cv_scores <- numeric(cv_folds)
+    importance_matrix <- matrix(0, nrow = cv_folds, ncol = length(current_features))
+    
+    for (fold in seq_len(cv_folds)) {
+      
+      train_idx <- unlist(cv_indices[-fold])
+      val_idx   <- cv_indices[[fold]]
+      
+      X_cv_train <- X_train[train_idx, current_features, drop = FALSE]
+      X_cv_val   <- X_train[val_idx, current_features, drop = FALSE]
+      y_cv_train <- as.factor(y_train[train_idx])
+      y_cv_val   <- y_train[val_idx]
+      
+      ## ---- SCALE INSIDE FOLD ----
+      fold_scaler <- preProcess(X_cv_train, method = c("center", "scale"))
+      X_cv_train_sc <- predict(fold_scaler, X_cv_train)
+      X_cv_val_sc   <- predict(fold_scaler, X_cv_val)
+      
+      ## ---- PLS-DA MODEL ----
+      ncomp_fold <- min(ncomp_rfe, nrow(X_cv_train_sc) - 1)
+      
+      fold_plsda <- mixOmics::plsda(
+        X_cv_train_sc,
+        y_cv_train,
+        ncomp = ncomp_fold
+      )
+      
+      ## ---- PREDICTION ----
+      fold_pred <- predict(fold_plsda, X_cv_val_sc)$class$max.dist[, ncomp_fold]
+      cv_scores[fold] <- mean(fold_pred == y_cv_val)
+      
+      ## ---- VIP IMPORTANCE ----
+      fold_vip <- vip(fold_plsda)
+      importance_matrix[fold, ] <- rowMeans(fold_vip[, seq_len(ncomp_fold), drop = FALSE])
+    }
+    
+    mean_cv_accuracy <- mean(cv_scores)
+    mean_importance <- colMeans(importance_matrix)
+    
+    ## ---- STORE RESULTS ----
+    rfe_results[[iteration]] <- list(
+      features = current_features,
+      feature_names = colnames(X_train)[current_features],
+      importance = mean_importance,
+      cv_accuracy = mean_cv_accuracy,
+      n_features = length(current_features)
+    )
+    
+    cat("  CV Accuracy:", round(mean_cv_accuracy, 4), "\n")
+    
+    ## ---- REMOVE LEAST IMPORTANT FEATURES ----
+    n_remove <- max(1, round(length(current_features) * step_size))
+    n_remove <- min(n_remove, length(current_features) - min_features)
+    
+    remove_idx <- order(mean_importance)[seq_len(n_remove)]
+    current_features <- current_features[-remove_idx]
+    
+    iteration <- iteration + 1
+  }
+  
+  cat("\nRFE completed after", length(rfe_results), "iterations\n")
+  return(rfe_results)
+}
+set.seed(123)
+
+rfe_results <- rfe_plsda_selection(
+  X_train = train_data,
+  y_train = train_labels,
+  cv_folds = 10,
+  step_size = 0.15,
+  min_features = 20,
+  max_iter = 20,
+  ncomp_rfe = optimal_ncomp
+)
+
+rfe_summary <- data.frame(
+  Iteration = seq_along(rfe_results),
+  N_Features = sapply(rfe_results, function(x) x$n_features),
+  CV_Accuracy = sapply(rfe_results, function(x) x$cv_accuracy)
+)
+
+best_iteration <- which.max(rfe_summary$CV_Accuracy)
+rfe_selected_features <- rfe_results[[best_iteration]]$features
+rfe_selected_feature_names <- rfe_results[[best_iteration]]$feature_names
+
+cat("\n=== RFE Results ===\n")
+cat("Best iteration:", best_iteration, "\n")
+cat("Optimal number of features:", length(rfe_selected_features), "\n")
+cat("Best CV accuracy:", round(max(rfe_summary$CV_Accuracy), 4), "\n")
+
+```
+
+```{r}
+# Plot RFE results
+rfe_plot <- ggplot(rfe_summary, aes(x = N_Features, y = CV_Accuracy)) +
+  geom_line(color = "royalblue3", linewidth = 1) +
+  geom_point(color = "royalblue3", size = 2) +
+  geom_point(data = rfe_summary[best_iteration, ], 
+             aes(x = N_Features, y = CV_Accuracy),
+             color = "red", size = 4, shape = 17) +
+  labs(title = "Recursive Feature Elimination",
+       subtitle = paste("Optimal:", length(rfe_selected_features), "features"),
+       x = "Number of Features",
+       y = "Cross-Validation Accuracy") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5))
+
+print(rfe_plot)
+ggsave("plots/rfe_results.png", plot = rfe_plot, width = 8, height = 6, dpi = 300)
+```
+
+------------------------------------------------------------------------
+
+## Train FINAL optimized PLS-DA model with selected features
+
+```{r}
+
+# Subset training and test data to selected features only
+train_data_selected <- train_data[, rfe_selected_features]
+test_data_selected <- test_data[, rfe_selected_features]
+
+cat("\n=== Training Final Model with Selected Features ===\n")
+cat("Training set:", nrow(train_data_selected), "samples,", ncol(train_data_selected), "features\n")
+cat("Test set:", nrow(test_data_selected), "samples,", ncol(test_data_selected), "features\n")
+
+# Train initial model with selected features
+plsda_selected <- mixOmics::plsda(train_data_selected, 
+                                  as.factor(train_labels), 
+                                  ncomp = 10)
+
+# Re-optimize ncomp for the reduced feature set
+set.seed(123)
+perf_selected <- perf(plsda_selected,
+                      validation = "Mfold",
+                      folds = 10,
+                      nrepeat = 50,
+                      progressBar = FALSE)
+
+# Plot performance for selected features
+plot(perf_selected, sd = TRUE, legend.position = "horizontal")
+print(perf_selected$choice.ncomp)
+
+optimal_ncomp_selected <- perf_selected$choice.ncomp["BER", "max.dist"]
+paste("Optimal number of components for selected features:", optimal_ncomp_selected)
+
+# Train TRULY FINAL model with optimal ncomp and selected features
+final_plsda_optimized <- mixOmics::plsda(train_data_selected,
+                                         as.factor(train_labels),
+                                         ncomp = optimal_ncomp_selected)
+
+cat("\n=== Final Model Summary ===\n")
+cat("Number of components:", optimal_ncomp_selected, "\n")
+cat("Number of features:", ncol(train_data_selected), "\n")
+```
+
+## Evaluate FINAL model on test set
+
+```{r}
+
+# Predict on test data using selected features
+plsda_pred_final <- predict(final_plsda_optimized, test_data_selected)
+
+# Extract predicted classes
+predicted_classes_final <- plsda_pred_final$class$max.dist[, optimal_ncomp_selected]
+
+# Confusion matrix
+confusion_matrix_final <- table(Predicted = predicted_classes_final, Actual = test_labels)
+print(confusion_matrix_final)
+
+cm_df_final <- as.data.frame(as.table(confusion_matrix_final))
+names(cm_df_final) <- c("Predicted", "Actual", "Count")
+
+# accuracy final
+accuracy_final <- sum(diag(confusion_matrix_final)) / sum(confusion_matrix_final)
+
+cm_plot_final <- ggplot(cm_df_final, aes(x = Predicted, y = Actual, fill = Count)) +
+  geom_tile(color = "white", size = 1) +
+  geom_text(aes(label = Count), color = "white", size = 8, fontface = "bold") +
+  scale_fill_gradient(low = "royalblue3", high = "darkblue") +
+  labs(title = "Confusion Matrix - Final Model",
+       subtitle = paste("Accuracy =", sprintf("%.2f%%", accuracy_final*100)),
+       x = "Predicted Class",
+       y = "Actual Class") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 12))
+
+ggsave("plots/confusion_matrix_final.png", plot = cm_plot_final, width = 6, height = 6, dpi = 300)
+
+
+# Calculate metrics
+sensitivity_final <- confusion_matrix_final["Male","Male"] / sum(confusion_matrix_final[,"Male"])
+specificity_final <- confusion_matrix_final["Female","Female"] / sum(confusion_matrix_final[,"Female"])
+balanced_accuracy_final <- (sensitivity_final + specificity_final) / 2
+
+cat("\n=== Final Model Performance on Test Set ===\n")
+cat("Accuracy:", round(accuracy_final, 3), "\n")
+cat("Balanced Accuracy:", round(balanced_accuracy_final, 3), "\n")
+cat("Sensitivity (Male):", round(sensitivity_final, 3), "\n")
+cat("Specificity (Female):", round(specificity_final, 3), "\n")
+
+# AUROC for final model
+test_numeric <- ifelse(test_labels == "Male", 1, 0)
+plsda_pred_prob_final <- plsda_pred_final$predict[, "Male", optimal_ncomp_selected]
+plsda_pred_prob_final <- as.numeric(plsda_pred_prob_final)
+
+roc_curve_final <- roc(test_numeric, plsda_pred_prob_final, levels = c(0, 1))
+auc_value_final <- auc(roc_curve_final)
+
+cat("AUROC:", round(auc_value_final, 3), "\n")
+
+# Plot ROC curve
+png("plots/roc_curve_final.png", width = 2000, height = 2000, res = 300)
+plot(roc_curve_final, main = "Final PLS-DA ROC Curve (Selected Features)", 
+     col = "royalblue3", lwd = 2)
+legend("bottomright", legend = paste("AUROC =", round(auc_value_final, 3)), 
+       col = "royalblue3", lwd = 2)
+dev.off()
+
+plot(roc_curve_final, main = "Final PLS-DA ROC Curve (Selected Features)", 
+     col = "royalblue3", lwd = 2)
+legend("bottomright", legend = paste("AUROC =", round(auc_value_final, 3)), 
+       col = "royalblue3", lwd = 2)
+```
+
+## Final PLS-DA Score Plot
+
+```{r}
+
+train_df_final <- data.frame(
+  LV1 = final_plsda_optimized$variates$X[,1],
+  LV2 = if(optimal_ncomp_selected >= 2) final_plsda_optimized$variates$X[,2] else rep(0, nrow(final_plsda_optimized$variates$X)),
+  Sex = train_labels
+)
+
+plsda_plot_final <- ggplot(train_df_final, aes(x = LV1, y = LV2, color = Sex)) +
+  geom_point(size = 2.5, alpha = 0.7) +
+  stat_ellipse(aes(fill = Sex), alpha = 0.15, type = "norm", level = 0.95, geom = "polygon") +
+  xlab(paste0("Component 1 (", round(final_plsda_optimized$prop_expl_var$X[1]*100, 2), "%)")) +
+  ylab(paste0("Component 2 (", round(final_plsda_optimized$prop_expl_var$X[2]*100, 2), "%)")) +
+  ggtitle("Final PLS-DA Score Plot (Selected Features)") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+print(plsda_plot_final)
+ggsave("plots/plsda_score_plot_final.png", plot = plsda_plot_final, width = 8, height = 6, dpi = 300)
+```
+
+## Compare models: Before vs After feature selection
+
+```{r}
+comparison_df <- data.frame(
+  Model = c("All Features", "Selected Features (RFE)"),
+  N_Features = c(ncol(train_data), ncol(train_data_selected)),
+  N_Components = c(optimal_ncomp, optimal_ncomp_selected),
+  Test_Accuracy = c(accuracy, accuracy_final),
+  Test_Balanced_Acc = c(balanced_accuracy, balanced_accuracy_final),
+  Test_AUROC = c(auc_value, auc_value_final)
+)
+
+print(comparison_df)
+
+cat("\n=== Feature Selection Summary ===\n")
+cat("Original features:", ncol(train_data), "\n")
+cat("Selected features:", ncol(train_data_selected), "\n")
+cat("Reduction:", round((1 - ncol(train_data_selected)/ncol(train_data))*100, 1), "%\n")
+cat("\nPerformance change:\n")
+cat("Accuracy:", round((accuracy_final - accuracy)*100, 2), "percentage points\n")
+cat("AUROC:", round((auc_value_final - auc_value), 3), "\n")
+```

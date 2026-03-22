@@ -31,16 +31,16 @@ Investigate whether biological sex influences baseline urinary metabolomic profi
 ## Dataset
  
 - **Source:** Supplementary materials from Fan et al. (2018), *Scientific Reports* 8, 11883.
-- **Samples:** 121 total — 60 healthy females and 61 healthy males (age range: 45–65 years), all medication-free for ≥2 months.
-- **Features:** 414 urinary metabolites profiled via Gas Chromatography–Time-of-Flight Mass Spectrometry (GC-TOF-MS).
+- **Samples:** 121 total — 60 healthy females and 61 healthy males (age range: 45–65 years).
+- **Features:** 414 urinary metabolites profiled via GC-TOF-MS.
 - **Missing values:** None (pre-imputed in the original dataset using BinBase software).
  
 All data files are located in the `data/` folder:
  
 | File | Description |
 |---|---|
-| `table1.xlsx` | Supplementary Table 1 from Fan et al. (2018) — raw metabolite intensity matrix |
-| `table2.xlsx` | Supplementary Table 2 from Fan et al. (2018) — sample metadata and annotations |
+| `table1.xlsx` | Supplementary Table 1 — raw metabolite intensity matrix |
+| `table2.xlsx` | Supplementary Table 2 — sample metadata and annotations |
 | `data.csv` | Merged and preprocessed table used as input for the analysis pipeline |
  
 > The original supplementary tables and the merged dataset are derived from Fan et al. (2018) and are included here strictly for reproducibility purposes. Please refer to the original publication for full data provenance.

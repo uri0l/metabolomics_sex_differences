@@ -1,6 +1,12 @@
 # Sex-associated Differences in Baseline Urinary Metabolites
 
-> A computational metabolomics project developed for the Introduction to Statistical Learning course at the Universitat Politècnica de Barcelona (UPC), December 2025.  
+> A computational metabolomics project developed for the Introduction to Statistical Learning course at the Universitat Politècnica de Barcelona (UPC), December 2025.
+
+**Authors:** 
+* Òscar Contreras
+* [Eira Fontanals](https://github.com/eirafontanals)
+* [Oriol Leal](https://github.com/uri0l)
+* Marc J. Torres
 
 [![R-Analysis](https://img.shields.io/badge/Language-R-blue.svg)](https://www.r-project.org/)
 [![Bioinformatics](https://img.shields.io/badge/Field-Bioinformatics-green.svg)](https://en.wikipedia.org/wiki/Bioinformatics)

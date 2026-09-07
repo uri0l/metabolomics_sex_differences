@@ -6,7 +6,7 @@
 * [Òscar Contreras](https://github.com/ocontrerasparejo)
 * [Eira Fontanals](https://github.com/eirafontanals)
 * [Oriol Leal](https://github.com/uri0l)
-* Marc J. Torres
+* [Marc J. Torres](POSA AQUÍ EL LINK DEL TEU GITHUB!)
 
 [![R-Analysis](https://img.shields.io/badge/Language-R-blue.svg)](https://www.r-project.org/)
 [![Bioinformatics](https://img.shields.io/badge/Field-Bioinformatics-green.svg)](https://en.wikipedia.org/wiki/Bioinformatics)
